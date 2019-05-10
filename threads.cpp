@@ -14,8 +14,9 @@ using namespace std;
 #define MAX 128			/* max number of threads allowed*/
 #define MAIN_ID 0
 
+static sigset_t mask;	// blocking list
 static int numOfThreads = 0;
-static int curr_thread_id = 0;
+static pthread_t curr_thread_id = 0;
 static queue<TCB> thread_pool;
 
 
@@ -26,7 +27,6 @@ void print_thread_pool(queue<TCB> copy){
          copy.pop();
     }
 }
-
 
 
 // mangle function
@@ -84,7 +84,7 @@ void setup_timer_and_alarm(){
 	siga.sa_flags =  SA_NODEFER;
 
  	if (sigaction(SIGALRM, &siga, NULL) == -1) {
-    	perror("Error calling sigaction()");
+    	perror("Error calling sigaction()\n");
     	exit(1);
  	}
   
@@ -93,7 +93,7 @@ void setup_timer_and_alarm(){
   	it_val.it_interval = it_val.it_value;
   
   	if (setitimer(ITIMER_REAL, &it_val, NULL) == -1) {
-    	perror("Error calling setitimer()");
+    	perror("Error calling setitimer()\n");
     	exit(1);
  	}
 
@@ -103,7 +103,7 @@ void setup_timer_and_alarm(){
 void pthread_init(){
 
 	TCB main_thread;
-	main_thread.thread_id = numOfThreads;		// Main thread's id is 0
+	main_thread.thread_id = (pthread_t) numOfThreads;		// Main thread's id is 0
 	main_thread.thread_state = TH_ACTIVE;
 
 	main_thread.thread_start_routine = NULL;
@@ -128,7 +128,7 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_
 
 	// Create new thread
 	TCB new_thread;
-	new_thread.thread_id = numOfThreads;
+	new_thread.thread_id = (pthread_t) numOfThreads;
 	new_thread.thread_state = TH_ACTIVE;
 
 	new_thread.thread_start_routine = start_routine;
@@ -189,4 +189,24 @@ void pthread_exit(void *value_ptr){
 
 pthread_t pthread_self(void){
 	return curr_thread_id;
+}
+
+
+// block alarm, disable interuption
+void lock(){
+	sigemptyset(&mask);
+	sigaddset(&mask, SIGALRM);
+	if( sigprocmask(SIG_BLOCK, &mask, NULL) < 0 ){
+		perror("Error locking\n");
+		exit(1);
+	}
+}
+
+
+// resume interuption
+void unlock(){
+	if( sigprocmask(SIG_UNBLOCK, &mask, NULL) < 0 ){
+		perror("Error unlocking\n");
+		exit(1);
+	}
 }

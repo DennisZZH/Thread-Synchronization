@@ -2,6 +2,7 @@
 //Date: 4.21.2019
 
 #include <pthread.h>
+#include <semaphore.h>
 #include <setjmp.h>
 
 int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_routine)(void*), void *arg);
@@ -35,7 +36,7 @@ enum State{
 // Thread Control Block
 typedef struct {
 	// Define any fields you might need inside here.
-	int thread_id;
+	pthread_t thread_id;
 	enum State thread_state;
 	jmp_buf thread_buffer;
 	void *(*thread_start_routine)(void*);		// a pointer to the start_routine function
