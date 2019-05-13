@@ -6,7 +6,8 @@
 #include <stdio.h> 
 #include <sys/time.h>
 #include <signal.h>
-#include <queue>
+#include <list>
+#include <algorithm>
 
 using namespace std;
 
@@ -17,15 +18,34 @@ using namespace std;
 static sigset_t mask;	// blocking list
 static int numOfThreads = 0;
 static pthread_t curr_thread_id = 0;
-static queue<TCB> thread_pool;
+static list<TCB> thread_pool;
 
 
-void print_thread_pool(queue<TCB> copy){
-    printf("size = %d \n", copy.size());
-    while(copy.empty() == false){
-         printf("tid = %d \n", copy.front().thread_id);
-         copy.pop();
-    }
+void print_thread_pool(){
+    printf("size = %d \n", thread_pool.size());
+    list<TCB>::iterator it;
+	for (it = thread_pool.begin(); it != thread_pool.end(); ++it){
+    	cout << it->thread_id;
+	}
+}
+
+
+TCB* find_thread_by_id(pthread_t id){
+	list<TCB>::iterator it;
+	for (it = thread_pool.begin(); it != thread_pool.end(); ++it){
+    	if(it->thread_id == id){
+			return it;
+		}
+	}
+	return NULL;	//Return NULL if not found
+}
+
+
+void find_next_active_thread(){
+	while(thread_pool.front().thread_state != TH_ACTIVE){
+		thread_pool.push_back(thread_pool.front());
+        thread_pool.pop_front();
+	}
 }
 
 
@@ -45,10 +65,12 @@ static long int i64_ptr_mangle(long int p){
 
 
 void wrapper_function(){
- 
-    thread_pool.front().thread_start_routine(thread_pool.front().thread_arg);
+	
+	TCB executing_thread = thread_pool.front();
 
-    pthread_exit(0);
+    void* return_value = executing_thread.thread_start_routine(thread_pool.front().thread_arg);
+
+    pthread_exit(return_value);
 
 }
 
@@ -61,9 +83,11 @@ void thread_schedule(int signo){
   
   if(setjmp(thread_pool.front().thread_buffer) == 0){
 		
-		thread_pool.push(thread_pool.front());
+		thread_pool.push_back(thread_pool.front());
 
-        thread_pool.pop();
+        thread_pool.pop_front();
+
+		find_next_active_thread();
 
         curr_thread_id = thread_pool.front().thread_id;
 
@@ -109,10 +133,12 @@ void pthread_init(){
 	main_thread.thread_start_routine = NULL;
 	main_thread.thread_arg = NULL;
 	main_thread.thread_free = NULL;
+	main_thread.exit_code = NULL;
+	main_thread.joinfrom_thread = -1;
 	
 	setjmp(main_thread.thread_buffer);
 	
-	thread_pool.push(main_thread);
+	thread_pool.push_back(main_thread);
     numOfThreads++;
 
 	setup_timer_and_alarm();
@@ -134,6 +160,9 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_
 	new_thread.thread_start_routine = start_routine;
 	new_thread.thread_arg = arg;
 
+	new_thread.exit_code = NULL;
+	new_thread.joinfrom_thread = -1;
+
 	setjmp(new_thread.thread_buffer);
 	
 	unsigned long *new_sp = (unsigned long*) malloc(32767);
@@ -147,7 +176,7 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_
 
 	*thread = new_thread.thread_id;
 	
-	thread_pool.push(new_thread);
+	thread_pool.push_back(new_thread);
     numOfThreads++;
 
 	return 0;	// If success
@@ -159,10 +188,10 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_
      while(thread_pool.empty() == false){
 
 		 if(thread_pool.front().thread_id == MAIN_ID){
-			 thread_pool.pop();
+			 thread_pool.pop_front();
 		 }else{
 			free( thread_pool.front().thread_free);
-			thread_pool.pop();
+			thread_pool.pop_front();
 		 }
      }
  }
@@ -177,11 +206,17 @@ void pthread_exit(void *value_ptr){
 
 	}else{								// regular thread exit
 
-		free(thread_pool.front().thread_free);
-        thread_pool.pop();
+		thread_pool.front().thread_state = TH_DEAD;
+		thread_pool.front().exit_code = value_ptr;
 
-		curr_thread_id = thread_pool.front().thread_id;
-		longjmp(thread_pool.front().thread_buffer, 1);
+		if(thread_pool.front().joinfrom_thread != -1){			// If it is joint from somewhere
+
+			TCB* join_thread = find_thread_by_id(thread_pool.front().joinfrom_thread);
+			join_thread->thread_state = TH_ACTIVE;
+
+		}
+
+		thread_schedule(1);
         
 	}
 }
@@ -189,6 +224,32 @@ void pthread_exit(void *value_ptr){
 
 pthread_t pthread_self(void){
 	return curr_thread_id;
+}
+
+
+int pthread_join(pthread_t thread, void **value_ptr){
+
+	TCB* target_thread = find_thread_by_id(thread);
+	if(target_thread == NULL){
+		perror("Error finding target thread")
+		exit(1);
+	}
+	
+	if(target_thread->thread_state == TH_ACTIVE || target_thread->thread_state == TH_BLOCKED){		// block and wait
+
+		thread_pool.front().thread_state = TH_BLOCKED;
+		target_thread->joinfrom_thread = curr_thread_id;
+
+		thread_schedule(1);
+
+	}
+	
+	*value_ptr = target_thread->exit_code;
+		
+	free(target_thread->thread_free);
+	thread_pool.erase(target_thread);							
+	
+	return 0;	//If success
 }
 
 

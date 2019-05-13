@@ -42,7 +42,8 @@ typedef struct {
 	void *(*thread_start_routine)(void*);		// a pointer to the start_routine function
 	void* thread_arg;
 	unsigned long* thread_free;
-
+	void* exit_code;
+	pthread_t joinfrom_thread;
 } TCB;
 
 
