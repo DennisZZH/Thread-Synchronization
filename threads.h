@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <setjmp.h>
+#include <queue>
 
 int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_routine)(void*), void *arg);
 
@@ -46,4 +47,14 @@ typedef struct {
 	pthread_t joinfrom_thread;
 } TCB;
 
+
+// Semaphore Data Structure
+typedef struct {
+	// Define any fields you might need inside here.
+	int semaphore_id;
+	int semaphore_value;
+	int semaphore_max;
+	bool isInitialized;
+	queue<TCB> waiting_list;
+}Semaphore;
 

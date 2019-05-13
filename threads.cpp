@@ -11,14 +11,17 @@
 
 using namespace std;
 
-#define INTERVAL 50		/* time interval in milliseconds*/
-#define MAX 128			/* max number of threads allowed*/
+#define INTERVAL 50		/* time interval in milliseconds */
+#define MAX 128			/* max number of threads allowed */
 #define MAIN_ID 0
+#define SEM_VALUE_MAX 65536		/* max semaphore value */
 
 static sigset_t mask;	// blocking list
 static int numOfThreads = 0;
+static int numOfSemaphore = 0;
 static pthread_t curr_thread_id = 0;
 static list<TCB> thread_pool;
+static list<Semaphore> semaphore_list;
 
 
 void print_thread_pool(){
@@ -46,6 +49,17 @@ void find_next_active_thread(){
 		thread_pool.push_back(thread_pool.front());
         thread_pool.pop_front();
 	}
+}
+
+
+Semaphore* find_semaphore_by_id(int id){
+	list<Semaphore>::iterator it;
+	for (it = semaphore_list.begin(); it != semaphore_list.end(); ++it){
+    	if(it->semaphore_id == id){
+			return it;
+		}
+	}
+	return NULL;	//Return NULL if not found
 }
 
 
@@ -108,7 +122,7 @@ void setup_timer_and_alarm(){
 	siga.sa_flags =  SA_NODEFER;
 
  	if (sigaction(SIGALRM, &siga, NULL) == -1) {
-    	perror("Error calling sigaction()\n");
+    	perror("Error calling sigaction() !\n");
     	exit(1);
  	}
   
@@ -117,7 +131,7 @@ void setup_timer_and_alarm(){
   	it_val.it_interval = it_val.it_value;
   
   	if (setitimer(ITIMER_REAL, &it_val, NULL) == -1) {
-    	perror("Error calling setitimer()\n");
+    	perror("Error calling setitimer() !\n");
     	exit(1);
  	}
 
@@ -193,6 +207,7 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_
 			free( thread_pool.front().thread_free);
 			thread_pool.pop_front();
 		 }
+		 numOfThreads--;
      }
  }
 
@@ -231,7 +246,7 @@ int pthread_join(pthread_t thread, void **value_ptr){
 
 	TCB* target_thread = find_thread_by_id(thread);
 	if(target_thread == NULL){
-		perror("Error finding target thread")
+		perror("Error finding target thread !\n")
 		exit(1);
 	}
 	
@@ -247,7 +262,8 @@ int pthread_join(pthread_t thread, void **value_ptr){
 	*value_ptr = target_thread->exit_code;
 		
 	free(target_thread->thread_free);
-	thread_pool.erase(target_thread);							
+	thread_pool.erase(target_thread);
+	numOfThreads--;							
 	
 	return 0;	//If success
 }
@@ -258,7 +274,7 @@ void lock(){
 	sigemptyset(&mask);
 	sigaddset(&mask, SIGALRM);
 	if( sigprocmask(SIG_BLOCK, &mask, NULL) < 0 ){
-		perror("Error locking\n");
+		perror("Error locking !\n");
 		exit(1);
 	}
 }
@@ -267,7 +283,112 @@ void lock(){
 // resume interuption
 void unlock(){
 	if( sigprocmask(SIG_UNBLOCK, &mask, NULL) < 0 ){
-		perror("Error unlocking\n");
+		perror("Error unlocking !\n");
 		exit(1);
 	}
+}
+
+
+int sem_init(sem_t *sem, int pshared, unsigned int value){
+
+	Semaphore new_semaphore;
+	new_semaphore.semaphore_id = numOfSemaphore;
+	new_semaphore.semaphore_value = value;
+	new_semaphore.semaphore_max = value;
+	new_semaphore.isInitialized = true;
+
+	semaphore_list.push_back(new_semaphore);
+	numOfSemaphore++;
+
+	sem->__align = new_semaphore.semaphore_id;
+
+	return 0	// If success
+}
+
+
+int sem_destroy(sem_t *sem){
+
+	int target_id = sem->__align;
+
+	Semaphore* target_semaphore = semaphore_list.find_semaphore_by_id(target_id);
+	if(target_semaphore == NULL){
+		perror("Error finding target semaphore !\n")
+		exit(1);
+	}
+
+	if(target_semaphore->waiting_list.empty() != true){
+		perror("Error destroying target semaphore : thread waiting list is not empty !\n")
+		exit(1);
+	}
+
+	semaphore_list.erase(target_semaphore);
+	numOfSemaphore--;
+
+	return 0;	// If success
+}
+
+
+int sem_wait(sem_t *sem){
+
+	int target_id = sem->__align;
+
+	Semaphore* target_semaphore = semaphore_list.find_semaphore_by_id(target_id);
+	if(target_semaphore == NULL){
+		perror("Error finding target semaphore !\n")
+		exit(1);
+	}
+
+	if(target_semaphore->semaphore_value > 0){
+
+		target_semaphore->semaphore_value --;
+
+	}else{
+
+		thread_pool.front().thread_state = TH_BLOCKED;
+		
+		target_semaphore->waiting_list.push(thread_pool.front());
+
+	}
+
+	return 0;	// If success
+
+}
+
+
+int sem_post(sem_t *sem){
+
+	int target_id = sem->__align;
+
+	Semaphore* target_semaphore = semaphore_list.find_semaphore_by_id(target_id);
+	if(target_semaphore == NULL){
+		perror("Error finding target semaphore !\n")
+		exit(1);
+	}
+
+	if(target_semaphore->semaphore_value > 0){
+
+		if(target_semaphore->semaphore_value < target_semaphore->semaphore_max){
+
+			target_semaphore->semaphore_value++;
+
+		}else{
+
+			perror("Error posting semaphore: value exceed maximum !\n")
+			exit(1);
+
+		}
+
+	}else{
+
+		if(target_semaphore->waiting_list.empty() == true){
+
+			target_semaphore->semaphore_value++;
+		
+		}else{
+
+			target_semaphore->waiting_list.front().thread_state = TH_ACTIVE;
+			target_semaphore->waiting_list.pop();
+
+		}
+		
 }
