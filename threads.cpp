@@ -54,10 +54,10 @@ void delete_thread_by_id(pthread_t id){
         thread_pool.pop_front();
 	}
 	thread_pool.pop_front();
-	// while(thread_pool.front().thread_id != curr_thread_id){
-	// 	thread_pool.push_back(thread_pool.front());
-    //     thread_pool.pop_front();
-	// }
+	while(thread_pool.front().thread_id != curr_thread_id){
+		thread_pool.push_back(thread_pool.front());
+        thread_pool.pop_front();
+	}
 	// for (list<TCB>::iterator i = thread_pool.begin(); i != thread_pool.end(); i++){
 	// 	if(i->thread_id == id){
 	// 		thread_pool.erase(i);
@@ -285,6 +285,9 @@ int pthread_join(pthread_t thread, void **value_ptr){
 	print_thread_pool();
 	TCB* target_thread = find_thread_by_id(thread);
 
+	cout<<(int) thread<<endl;
+	cout<<target_thread->thread_id<<endl;
+
 	if(target_thread == NULL){
 		cout<<"Error finding target thread !"<<endl;
 		errno = ESRCH;
@@ -299,6 +302,14 @@ int pthread_join(pthread_t thread, void **value_ptr){
 		thread_schedule(1);
 
 	}
+
+	cout<<(int) thread<<endl;
+	cout<<target_thread->thread_id<<endl;
+
+	target_thread = find_thread_by_id(thread);
+
+	cout<<(int) thread<<endl;
+	cout<<target_thread->thread_id<<endl;
 
 	if(value_ptr != NULL){
 		*value_ptr = target_thread->exit_code;
@@ -438,7 +449,7 @@ int sem_post(sem_t *sem){
 			target_semaphore->semaphore_value++;
 		
 		}else{
-			cout<<"ZZZZZ"<<endl;
+		
 			pthread_t waiter_id = target_semaphore->waiting_list.front();
 			TCB* waiter = find_thread_by_id(waiter_id);
 			waiter->thread_state = TH_ACTIVE;
