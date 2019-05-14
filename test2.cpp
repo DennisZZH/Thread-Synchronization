@@ -13,22 +13,21 @@
 #include <iostream>
 
 using namespace std;
-//basic errorno test
+
+//basic pthread join test
 //==============================================================================
-static void* _thread_errno_test(void* arg){
+static void* _thread_join_test(void* arg){
+    sleep(1);
     pthread_exit(0);
 }
 
 int main(){
-    pthread_t tid1;
-        
-    pthread_create(&tid1, NULL,  &_thread_errno_test, NULL);
-    cout<<11111<<endl;
-    pthread_join(tid1, NULL);
-    sleep(1);
-    cout<<22222<<endl;
-    int rtn = pthread_join(tid1, NULL);
-    if (rtn != ESRCH){
+    pthread_t tid1 = 0;
+    
+    pthread_create(&tid1, NULL,  &_thread_join_test, NULL);
+    
+    int rtn = pthread_join(tid1, NULL); //failure occurs on a timeout
+    if (rtn != 0){
         cout<<"FAIL"<<endl;
         return 0;
     }else{

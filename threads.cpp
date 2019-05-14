@@ -13,12 +13,12 @@
 
 using namespace std;
 
-#define INTERVAL 50		/* time interval in milliseconds */
-#define MAX 128			/* max number of threads allowed */
+#define INTERVAL 50				/* time interval in milliseconds */
+#define MAX 128					/* max number of threads allowed */
 #define MAIN_ID 0
 #define SEM_VALUE_MAX 65536		/* max semaphore value */
 
-static sigset_t mask;	// blocking list
+static sigset_t mask;			// blocking list
 static int numOfThreads = 0;
 static int numOfSemaphore = 0;
 static pthread_t curr_thread_id = 0;
@@ -26,7 +26,9 @@ static list<TCB> thread_pool;
 static list<Semaphore> semaphore_list;
 
 
+/* Helper Functions*/
 void print_thread_pool(){
+	printf("curr thread = %d \n", curr_thread_id);
     printf("size = %d \n", thread_pool.size());
     list<TCB>::iterator it;
 	for (it = thread_pool.begin(); it != thread_pool.end(); ++it){
@@ -37,42 +39,47 @@ void print_thread_pool(){
 
 
 TCB* find_thread_by_id(pthread_t id){
-	
 	list<TCB>::iterator it;
 	for (it = thread_pool.begin(); it != thread_pool.end(); ++it){
     	if(it->thread_id == id){
-			return &*it;
+			return &*it;										// return a pointer to the target thread
 		}
 	}
-
-	return NULL;	//Return NULL if not found
+	return NULL;												//Return NULL if not found
 }
 
 void delete_thread_by_id(pthread_t id){
-	while(thread_pool.front().thread_id != id){
+	while(thread_pool.front().thread_id != id){					// find the target thread
 		thread_pool.push_back(thread_pool.front());
         thread_pool.pop_front();
 	}
-	thread_pool.pop_front();
-	while(thread_pool.front().thread_id != curr_thread_id){
-		thread_pool.push_back(thread_pool.front());
-        thread_pool.pop_front();
-	}
-	// for (list<TCB>::iterator i = thread_pool.begin(); i != thread_pool.end(); i++){
-	// 	if(i->thread_id == id){
-	// 		thread_pool.erase(i);
-	// 	}
-	// 	break;
-	// }
-}
-
-
-void find_next_active_thread(){
-	while(thread_pool.front().thread_state != TH_ACTIVE){
+	thread_pool.pop_front();									// delete target thread
+	while(thread_pool.front().thread_id != curr_thread_id){		// roll thread pool back in order
 		thread_pool.push_back(thread_pool.front());
         thread_pool.pop_front();
 	}
 }
+
+
+void find_next_active_thread(){									// find the next active thread, used by scheduler
+	while(thread_pool.front().thread_state != TH_ACTIVE){		// the active thread is end up at the front of the list
+		thread_pool.push_back(thread_pool.front());
+        thread_pool.pop_front();
+	}
+}
+
+
+void free_all_threads(){
+     while(thread_pool.empty() == false){
+		 if(thread_pool.front().thread_id == MAIN_ID){
+			 thread_pool.pop_front();
+		 }else{
+			free( thread_pool.front().thread_free);
+			thread_pool.pop_front();
+		 }
+		 numOfThreads--;
+     }
+ }
 
 
 Semaphore* find_semaphore_by_id(int id){
@@ -82,7 +89,7 @@ Semaphore* find_semaphore_by_id(int id){
 			return &*it;
 		}
 	}
-	return NULL;	//Return NULL if not found
+	return NULL;												//Return NULL if not found
 }
 
 void delete_semaphore_by_id(int id){
@@ -128,9 +135,6 @@ void thread_schedule(int signo){
   
   if(setjmp(thread_pool.front().thread_buffer) == 0){
 
-	  	cout<<"before schdule"<<endl;
-		  print_thread_pool();
-		
 		thread_pool.push_back(thread_pool.front());
 
         thread_pool.pop_front();
@@ -139,18 +143,15 @@ void thread_schedule(int signo){
 
         curr_thread_id = thread_pool.front().thread_id;
 
-		cout<<"after schedule"<<endl;
-		print_thread_pool();
-
 		longjmp(thread_pool.front().thread_buffer,1);
 
-		
 	}
 		
     return;
 }
 
 
+// one time set up alarm
 void setup_timer_and_alarm(){
 	
 	struct itimerval it_val;
@@ -175,8 +176,29 @@ void setup_timer_and_alarm(){
 
 }
 
-//Call to initialize thread system, then add main thread to thread table
-void pthread_init(){
+
+// block alarm, disable interuption
+void lock(){
+	sigemptyset(&mask);
+	sigaddset(&mask, SIGALRM);
+	if( sigprocmask(SIG_BLOCK, &mask, NULL) < 0 ){
+		perror("Error locking !\n");
+		exit(1);
+	}
+}
+
+
+// resume interuption
+void unlock(){
+	if( sigprocmask(SIG_UNBLOCK, &mask, NULL) < 0 ){
+		perror("Error unlocking !\n");
+		exit(1);
+	}
+}
+
+
+/*Thread Library*/
+void pthread_init(){										//Call to initialize thread system, then add main thread to thread table
 
 	TCB main_thread;
 	main_thread.thread_id = (pthread_t) numOfThreads;		// Main thread's id is 0
@@ -194,6 +216,7 @@ void pthread_init(){
     numOfThreads++;
 
 	setup_timer_and_alarm();
+
 }
 
 
@@ -228,36 +251,31 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_
 
 	*thread = new_thread.thread_id;
 	
+	lock();
+
 	thread_pool.push_back(new_thread);
     numOfThreads++;
+
+	unlock();
 
 	return 0;	// If success
 
 }
 
 
- void free_all_threads(){
-     while(thread_pool.empty() == false){
-
-		 if(thread_pool.front().thread_id == MAIN_ID){
-			 thread_pool.pop_front();
-		 }else{
-			free( thread_pool.front().thread_free);
-			thread_pool.pop_front();
-		 }
-		 numOfThreads--;
-     }
- }
-
-
 void pthread_exit(void *value_ptr){
 	
-	if(curr_thread_id == MAIN_ID){		// main thread exit, clean up memory, terminate the process
-
+	if(curr_thread_id == MAIN_ID){								// main thread exit, clean up memory, terminate the process
+		
+		lock();
 		free_all_threads();
+		unlock();
+
 		exit(0);
 
-	}else{								// regular thread exit
+	}else{														// regular thread exit
+
+		lock();
 
 		thread_pool.front().thread_state = TH_DEAD;
 		thread_pool.front().exit_code = value_ptr;
@@ -268,6 +286,8 @@ void pthread_exit(void *value_ptr){
 			join_thread->thread_state = TH_ACTIVE;
 
 		}
+
+		unlock();
 
 		thread_schedule(1);
         
@@ -281,68 +301,41 @@ pthread_t pthread_self(void){
 
 
 int pthread_join(pthread_t thread, void **value_ptr){
-	cout<<"pthread_join begin"<<endl;
-	print_thread_pool();
+
 	TCB* target_thread = find_thread_by_id(thread);
 
-	cout<<(int) thread<<endl;
-	cout<<target_thread->thread_id<<endl;
-
 	if(target_thread == NULL){
-		cout<<"Error finding target thread !"<<endl;
+		cerr<<"Error finding target thread !"<<endl;
 		errno = ESRCH;
 		return errno;
 	}
 
 	if(target_thread->thread_state == TH_ACTIVE || target_thread->thread_state == TH_BLOCKED){		// block and wait
 
+		lock();
 		thread_pool.front().thread_state = TH_BLOCKED;
 		target_thread->joinfrom_thread = curr_thread_id;
+		unlock();
 	
 		thread_schedule(1);
 
 	}
 
-	cout<<(int) thread<<endl;
-	cout<<target_thread->thread_id<<endl;
+	lock();
 
 	target_thread = find_thread_by_id(thread);
-
-	cout<<(int) thread<<endl;
-	cout<<target_thread->thread_id<<endl;
 
 	if(value_ptr != NULL){
 		*value_ptr = target_thread->exit_code;
 	}
-	
+
 	free(target_thread->thread_free);
-
 	delete_thread_by_id(target_thread->thread_id);
-	
 	numOfThreads--;		
-	cout<<"pthread_join finished"<<endl;					
-	print_thread_pool();
+
+	unlock();
+	
 	return 0;	//If success
-}
-
-
-// block alarm, disable interuption
-void lock(){
-	sigemptyset(&mask);
-	sigaddset(&mask, SIGALRM);
-	if( sigprocmask(SIG_BLOCK, &mask, NULL) < 0 ){
-		perror("Error locking !\n");
-		exit(1);
-	}
-}
-
-
-// resume interuption
-void unlock(){
-	if( sigprocmask(SIG_UNBLOCK, &mask, NULL) < 0 ){
-		perror("Error unlocking !\n");
-		exit(1);
-	}
 }
 
 
@@ -354,8 +347,10 @@ int sem_init(sem_t *sem, int pshared, unsigned int value){
 	new_semaphore.semaphore_max = value;
 	new_semaphore.isInitialized = true;
 
+	lock();
 	semaphore_list.push_back(new_semaphore);
 	numOfSemaphore++;
+	unlock();
 
 	sem->__align = new_semaphore.semaphore_id;
 
@@ -378,18 +373,19 @@ int sem_destroy(sem_t *sem){
 		exit(1);
 	}
 
+	lock();
 	delete_semaphore_by_id(target_id);
-
 	numOfSemaphore--;
+	unlock();
 
 	return 0;	// If success
 }
 
 
 int sem_wait(sem_t *sem){
-	cout<<"sem_wait begin"<<endl;
-	print_thread_pool();
+
 	int target_id = sem->__align;
+
 
 	Semaphore* target_semaphore = find_semaphore_by_id(target_id);
 	if(target_semaphore == NULL){
@@ -410,16 +406,14 @@ int sem_wait(sem_t *sem){
 		thread_schedule(1);
 
 	}
-	cout<<"sem_wait finished"<<endl;
-	print_thread_pool();
+	
 	return 0;	// If success
 
 }
 
 
 int sem_post(sem_t *sem){
-	cout<<"sem_post begin"<<endl;
-	print_thread_pool();
+
 	int target_id = sem->__align;
 
 	Semaphore* target_semaphore = find_semaphore_by_id(target_id);
@@ -427,8 +421,7 @@ int sem_post(sem_t *sem){
 		perror("Error finding target semaphore !\n");
 		exit(1);
 	}
-	cout<<"sema value = "<<target_semaphore->semaphore_value<<endl;
-	cout<<"waiting list = "<<target_semaphore->waiting_list.size()<<endl;
+
 	if(target_semaphore->semaphore_value > 0){
 
 		if(target_semaphore->semaphore_value < target_semaphore->semaphore_max){
@@ -458,8 +451,7 @@ int sem_post(sem_t *sem){
 
 		}
 	}
-	cout<<"sem_post finished"<<endl;
-	print_thread_pool();
+
 	return 0;	// If success
 		
 }
