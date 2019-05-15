@@ -55,8 +55,6 @@ typedef struct {
 	// Define any fields you might need inside here.
 	int semaphore_id;
 	int semaphore_value;
-	int semaphore_max;
-	bool isInitialized;
 	queue<pthread_t> waiting_list;
 }Semaphore;
 

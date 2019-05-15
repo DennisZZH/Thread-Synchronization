@@ -118,6 +118,8 @@ static long int i64_ptr_mangle(long int p){
 
 void wrapper_function(){
 	
+	unlock();
+
 	TCB executing_thread = thread_pool.front();
 
     void* return_value = executing_thread.thread_start_routine(thread_pool.front().thread_arg);
@@ -133,6 +135,7 @@ void thread_schedule(int signo){
       return;
   }
   
+  lock();
   if(setjmp(thread_pool.front().thread_buffer) == 0){
 
 		thread_pool.push_back(thread_pool.front());
@@ -146,7 +149,8 @@ void thread_schedule(int signo){
 		longjmp(thread_pool.front().thread_buffer,1);
 
 	}
-		
+
+	unlock();
     return;
 }
 
@@ -228,6 +232,8 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_
 	}
 
 	// Create new thread
+	lock();
+
 	TCB new_thread;
 	new_thread.thread_id = (pthread_t) numOfThreads;
 	new_thread.thread_state = TH_ACTIVE;
@@ -250,8 +256,6 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_
 	new_thread.thread_buffer[0].__jmpbuf[7] = i64_ptr_mangle((unsigned long)wrapper_function_ptr);
 
 	*thread = new_thread.thread_id;
-	
-	lock();
 
 	thread_pool.push_back(new_thread);
     numOfThreads++;
@@ -302,23 +306,40 @@ pthread_t pthread_self(void){
 
 int pthread_join(pthread_t thread, void **value_ptr){
 
+	lock();
 	TCB* target_thread = find_thread_by_id(thread);
 
 	if(target_thread == NULL){
 		cerr<<"Error finding target thread !"<<endl;
 		errno = ESRCH;
+		unlock();
+		return errno;
+	}
+
+	if(target_thread->joinfrom_thread != -1){
+		cerr<<"Error other thread is waiting for this thread !"<<endl;
+		errno = EINVAL;
+		unlock();
+		return errno;
+	}
+
+	if(thread_pool.front().joinfrom_thread == thread){
+		cerr<<"Error deadlock detected !"<<endl;
+		errno = EDEADLK;
+		unlock();
 		return errno;
 	}
 
 	if(target_thread->thread_state == TH_ACTIVE || target_thread->thread_state == TH_BLOCKED){		// block and wait
 
-		lock();
 		thread_pool.front().thread_state = TH_BLOCKED;
 		target_thread->joinfrom_thread = curr_thread_id;
 		unlock();
 	
 		thread_schedule(1);
 
+	}else{
+		unlock();
 	}
 
 	lock();
@@ -341,18 +362,16 @@ int pthread_join(pthread_t thread, void **value_ptr){
 
 int sem_init(sem_t *sem, int pshared, unsigned int value){
 
+	lock();
 	Semaphore new_semaphore;
 	new_semaphore.semaphore_id = numOfSemaphore;
 	new_semaphore.semaphore_value = value;
-	new_semaphore.semaphore_max = value;
-	new_semaphore.isInitialized = true;
 
-	lock();
 	semaphore_list.push_back(new_semaphore);
 	numOfSemaphore++;
-	unlock();
 
 	sem->__align = new_semaphore.semaphore_id;
+	unlock();
 
 	return 0;	// If success
 }
@@ -360,20 +379,22 @@ int sem_init(sem_t *sem, int pshared, unsigned int value){
 
 int sem_destroy(sem_t *sem){
 
+	lock();
 	int target_id = sem->__align;
 
 	Semaphore* target_semaphore = find_semaphore_by_id(target_id);
 	if(target_semaphore == NULL){
 		perror("Error finding target semaphore !\n");
-		exit(1);
+		unlock();
+		return -1;
 	}
 
 	if(target_semaphore->waiting_list.empty() != true){
 		perror("Error destroying target semaphore : thread waiting list is not empty !\n");
-		exit(1);
+		unlock();
+		return -1;
 	}
 
-	lock();
 	delete_semaphore_by_id(target_id);
 	numOfSemaphore--;
 	unlock();
@@ -384,24 +405,27 @@ int sem_destroy(sem_t *sem){
 
 int sem_wait(sem_t *sem){
 
+	lock();
 	int target_id = sem->__align;
-
 
 	Semaphore* target_semaphore = find_semaphore_by_id(target_id);
 	if(target_semaphore == NULL){
 		perror("Error finding target semaphore !\n");
-		exit(1);
+		unlock();
+		return -1;
 	}
 
 	if(target_semaphore->semaphore_value > 0){
 
 		target_semaphore->semaphore_value --;
+		unlock();
 
 	}else{
 
 		thread_pool.front().thread_state = TH_BLOCKED;
 		
 		target_semaphore->waiting_list.push(thread_pool.front().thread_id);
+		unlock();
 
 		thread_schedule(1);
 
@@ -414,24 +438,28 @@ int sem_wait(sem_t *sem){
 
 int sem_post(sem_t *sem){
 
+	lock();
 	int target_id = sem->__align;
 
 	Semaphore* target_semaphore = find_semaphore_by_id(target_id);
 	if(target_semaphore == NULL){
 		perror("Error finding target semaphore !\n");
-		exit(1);
+		unlock();
+		return -1;
 	}
 
 	if(target_semaphore->semaphore_value > 0){
 
-		if(target_semaphore->semaphore_value < target_semaphore->semaphore_max){
+		if(target_semaphore->semaphore_value < SEM_VALUE_MAX){
 
 			target_semaphore->semaphore_value++;
+			unlock();
 
 		}else{
 
 			perror("Error posting semaphore: value exceed maximum !\n");
-			exit(1);
+			unlock();
+			return -1;
 
 		}
 
@@ -440,6 +468,7 @@ int sem_post(sem_t *sem){
 		if(target_semaphore->waiting_list.empty() == true){
 			
 			target_semaphore->semaphore_value++;
+			unlock();
 		
 		}else{
 		
@@ -448,7 +477,7 @@ int sem_post(sem_t *sem){
 			waiter->thread_state = TH_ACTIVE;
 
 			target_semaphore->waiting_list.pop();
-
+			unlock();
 		}
 	}
 
